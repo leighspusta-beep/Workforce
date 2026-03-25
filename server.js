@@ -31,7 +31,8 @@ app.get('/', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 app.post('/ai', async (req, res) => {
   const { system, messages, model, max_tokens } = req.body;
-
+console.log('AI request received:', model, 'messages:', messages?.length);
+  
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'messages array required' });
   }
@@ -61,9 +62,11 @@ app.post('/ai', async (req, res) => {
 
     if (!upstream.ok) {
       const err = await upstream.text();
+      console.error('Anthropic error:', upstream.status, err);
       res.write(`data: ${JSON.stringify({ error: err })}\n\n`);
       return res.end();
     }
+    console.log('Anthropic request success, streaming...');
 
     // Pipe the upstream SSE stream straight to the client
     upstream.body.on('data', chunk => res.write(chunk));
