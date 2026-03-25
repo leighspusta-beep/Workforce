@@ -51,12 +51,15 @@ console.log('AI request received:', model, 'messages:', messages?.length);
         'anthropic-version': '2023-06-01',
         'anthropic-beta':    'messages-2023-12-15'
       },
-      body: JSON.stringify({
+      // Filter out any system-role messages from the array
+const cleanMessages = messages.filter(m => m.role !== 'system');
+
+body: JSON.stringify({
         model:      model || 'claude-sonnet-4-20250514',
         max_tokens: max_tokens || 900,
         system:     system || '',
         stream:     true,
-        messages
+        messages:   cleanMessages
       })
     });
 
