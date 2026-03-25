@@ -11,7 +11,11 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Middleware ────────────────────────────────────────────────────
-app.use(cors());                        // Allow requests from your HTML file
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));                        // Allow requests from your HTML file
 app.use(express.json({ limit: '2mb' })); // Parse JSON bodies
 
 // ── Health check — visit your Render URL to confirm it's alive ────
