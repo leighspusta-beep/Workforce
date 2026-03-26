@@ -221,9 +221,12 @@ app.post('/aweber/send', async (req, res) => {
     );
 
     if (!createRes.ok) {
+      console.error('AWeber create failed, status:', createRes.status);
       const err = await createRes.json().catch(() => ({}));
       // Check if token needs refresh
       if (createRes.status === 401) {
+        const body401 = await createRes.text();
+        console.error('AWeber 401 body:', body401);
         return res.status(401).json({
           error: 'AWeber token expired — re-run the token refresh script (see SETUP_GUIDE.md)'
         });
