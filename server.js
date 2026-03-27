@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════
 //  AudioSpire Workforce™ — Render Backend
-//  Handles: AI (Ollama/Claude), OpenAI TTS, ElevenLabs TTS, AWeber
+//  Handles: AI (Claude), OpenAI TTS, ElevenLabs TTS, AWeber
 // ═══════════════════════════════════════════════════════════════════
 
 const express  = require('express');
@@ -10,34 +10,31 @@ const fetch    = require('node-fetch');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// ── Middleware ────────────────────────────────────────────────────
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
-}));                        // Allow requests from your HTML file
-app.use(express.json({ limit: '2mb' })); // Parse JSON bodies
+}));
+app.use(express.json({ limit: '2mb' }));
 
-// ── Health check — visit your Render URL to confirm it's alive ────
+// Health check
 app.get('/', (req, res) => {
   res.json({ status: 'AudioSpire Workforce Backend — Online ✓' });
 });
 
 // ═══════════════════════════════════════════════════════════════════
-//  ROUTE 1: /ai
-//  Proxies to Ollama (local) or Anthropic Claude (cloud fallback)
-//  The dashboard sends: { system, messages, model, max_tokens }
-//  We forward to Anthropic streaming SSE and pipe it back.
+//  ROUTE 1: /ai  — Anthropic Claude streaming
 // ═══════════════════════════════════════════════════════════════════
 app.post('/ai', async (req, res) => {
   const { system, messages, model, max_tokens } = req.body;
-console.log('AI request received:', model, 'messages:', messages?.length);
-  
+  console.log('AI request received:', model, 'messages:', messages?.length);
+
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'messages array required' });
   }
 
-  // Set headers for Server-Sent Events streaming
+  const cleanMessages = messages.filter(m => m.role !== 'system');
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -48,15 +45,14 @@ console.log('AI request received:', model, 'messages:', messages?.length);
       headers: {
         'Content-Type':      'application/json',
         'x-api-key':         process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta':    'messages-2023-12-15'
+        'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
         model:      model || 'claude-sonnet-4-20250514',
         max_tokens: max_tokens || 900,
         system:     system || '',
         stream:     true,
-        messages:   messages.filter(m => m.role !== 'system')
+        messages:   cleanMessages
       })
     });
 
@@ -66,9 +62,8 @@ console.log('AI request received:', model, 'messages:', messages?.length);
       res.write(`data: ${JSON.stringify({ error: err })}\n\n`);
       return res.end();
     }
-    console.log('Anthropic request success, streaming...');
 
-    // Pipe the upstream SSE stream straight to the client
+    console.log('Anthropic request success, streaming...');
     upstream.body.on('data', chunk => res.write(chunk));
     upstream.body.on('end',  ()    => res.end());
     upstream.body.on('error', e    => { console.error('AI stream error:', e); res.end(); });
@@ -81,9 +76,7 @@ console.log('AI request received:', model, 'messages:', messages?.length);
 });
 
 // ═══════════════════════════════════════════════════════════════════
-//  ROUTE 2: /tts
-//  OpenAI Text-to-Speech — returns raw audio bytes (mp3)
-//  Dashboard sends: { text, voice, model }
+//  ROUTE 2: /tts  — OpenAI Text-to-Speech
 // ═══════════════════════════════════════════════════════════════════
 app.post('/tts', async (req, res) => {
   const { text, voice = 'nova', model = 'tts-1' } = req.body;
@@ -92,7 +85,6 @@ app.post('/tts', async (req, res) => {
     return res.status(400).json({ error: 'text is required' });
   }
 
-  // Trim to 4000 chars — OpenAI TTS limit is 4096 chars
   const trimmed = text.trim().slice(0, 4000);
 
   try {
@@ -102,12 +94,7 @@ app.post('/tts', async (req, res) => {
         'Content-Type':  'application/json',
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
       },
-      body: JSON.stringify({
-        model,
-        voice,
-        input: trimmed,
-        response_format: 'mp3'
-      })
+      body: JSON.stringify({ model, voice, input: trimmed, response_format: 'mp3' })
     });
 
     if (!upstream.ok) {
@@ -125,9 +112,7 @@ app.post('/tts', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-//  ROUTE 3: /tts-elevenlabs
-//  ElevenLabs Text-to-Speech — returns raw audio bytes (mp3)
-//  Dashboard sends: { text, voice_id }
+//  ROUTE 3: /tts-elevenlabs  — ElevenLabs Text-to-Speech
 // ═══════════════════════════════════════════════════════════════════
 app.post('/tts-elevenlabs', async (req, res) => {
   const { text, voice_id } = req.body;
@@ -139,7 +124,7 @@ app.post('/tts-elevenlabs', async (req, res) => {
     return res.status(400).json({ error: 'voice_id is required' });
   }
 
-  const trimmed = text.trim().slice(0, 5000); // ElevenLabs limit varies by plan
+  const trimmed = text.trim().slice(0, 5000);
 
   try {
     const upstream = await fetch(
@@ -152,11 +137,11 @@ app.post('/tts-elevenlabs', async (req, res) => {
         },
         body: JSON.stringify({
           text: trimmed,
-          model_id: 'eleven_turbo_v2_5',   // Fast, high quality — change to eleven_multilingual_v2 if preferred
+          model_id: 'eleven_turbo_v2_5',
           voice_settings: {
-            stability:        0.45,   // Lower = more expressive
-            similarity_boost: 0.82,   // Higher = closer to original voice
-            style:            0.35,   // Style exaggeration (0–1)
+            stability:         0.45,
+            similarity_boost:  0.82,
+            style:             0.35,
             use_speaker_boost: true
           }
         })
@@ -178,9 +163,7 @@ app.post('/tts-elevenlabs', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-//  ROUTE 4: /aweber/send
-//  Sends a broadcast email via the AWeber API
-//  Dashboard sends: { subject, body, from_name, list_id }
+//  ROUTE 4: /aweber/send  — Send broadcast email via AWeber API
 // ═══════════════════════════════════════════════════════════════════
 app.post('/aweber/send', async (req, res) => {
   const { subject, body, from_name = 'Leigh Spusta', list_id } = req.body;
@@ -189,17 +172,15 @@ app.post('/aweber/send', async (req, res) => {
     return res.status(400).json({ error: 'subject and body are required' });
   }
 
-  // AWeber uses OAuth2 — we use a pre-authorized access token stored in env vars.
-  // See SETUP_GUIDE.md for how to get this token (one-time process).
   const accessToken = process.env.AWEBER_ACCESS_TOKEN;
   const accountId   = process.env.AWEBER_ACCOUNT_ID;
   const listIdToUse = list_id || process.env.AWEBER_DEFAULT_LIST_ID;
 
   if (!accessToken || !accountId || !listIdToUse) {
-    return res.status(500).json({
-      error: 'AWeber not configured — set AWEBER_ACCESS_TOKEN, AWEBER_ACCOUNT_ID, AWEBER_DEFAULT_LIST_ID in Render env vars'
-    });
+    return res.status(500).json({ error: 'AWeber not configured — check Render env vars' });
   }
+
+  console.log('AWeber send request — list:', listIdToUse, 'subject:', subject);
 
   try {
     // Step 1: Create the broadcast
@@ -220,27 +201,23 @@ app.post('/aweber/send', async (req, res) => {
       }
     );
 
+    const createText = await createRes.text();
+    console.log('AWeber create status:', createRes.status, 'body:', createText);
+
     if (!createRes.ok) {
-      const errText = await createRes.text();
-      console.error('AWeber create failed, status:', createRes.status, 'body:', errText);
       if (createRes.status === 401) {
-        return res.status(401).json({
-          error: 'AWeber token expired — re-run the token refresh script (see SETUP_GUIDE.md)'
-        });
+        return res.status(401).json({ error: 'AWeber token expired — re-run the token refresh script (see SETUP_GUIDE.md)' });
       }
       let errObj = {};
-      try { errObj = JSON.parse(errText); } catch(_) {}
-      return res.status(createRes.status).json({ error: errObj.error_description || errText || 'AWeber create error' });
-          error: 'AWeber token expired — re-run the token refresh script (see SETUP_GUIDE.md)'
-        });
-      }
-      return res.status(createRes.status).json({ error: err.error_description || 'AWeber create error' });
+      try { errObj = JSON.parse(createText); } catch(_) {}
+      return res.status(createRes.status).json({ error: errObj.error_description || createText || 'AWeber create error' });
     }
 
-    const broadcast = await createRes.json();
-    const broadcastId = broadcast.id;
+    const broadcast = JSON.parse(createText);
+    const broadcastId = broadcast.id || broadcast.broadcast_id;
+    console.log('AWeber broadcast created, id:', broadcastId);
 
-    // Step 2: Schedule the broadcast to send immediately
+    // Step 2: Schedule immediately
     const scheduleRes = await fetch(
       `https://api.aweber.com/1.0/accounts/${accountId}/lists/${listIdToUse}/broadcasts/${broadcastId}/schedule`,
       {
@@ -253,9 +230,13 @@ app.post('/aweber/send', async (req, res) => {
       }
     );
 
+    const scheduleText = await scheduleRes.text();
+    console.log('AWeber schedule status:', scheduleRes.status, 'body:', scheduleText);
+
     if (!scheduleRes.ok) {
-      const err = await scheduleRes.json().catch(() => ({}));
-      return res.status(scheduleRes.status).json({ error: err.error_description || 'AWeber schedule error' });
+      let errObj = {};
+      try { errObj = JSON.parse(scheduleText); } catch(_) {}
+      return res.status(scheduleRes.status).json({ error: errObj.error_description || scheduleText || 'AWeber schedule error' });
     }
 
     res.json({
@@ -271,9 +252,7 @@ app.post('/aweber/send', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-//  ROUTE 5: /aweber/refresh-token
-//  Call this once whenever your AWeber access token expires (~1 hour)
-//  It uses the refresh token to get a new access token automatically.
+//  ROUTE 5: /aweber/refresh-token  — Refresh AWeber OAuth token
 // ═══════════════════════════════════════════════════════════════════
 app.post('/aweber/refresh-token', async (req, res) => {
   try {
@@ -290,19 +269,16 @@ app.post('/aweber/refresh-token', async (req, res) => {
       body:    params.toString()
     });
 
+    const tokens = await tokenRes.json();
+
     if (!tokenRes.ok) {
-      const err = await tokenRes.json().catch(() => ({}));
-      return res.status(tokenRes.status).json({ error: err.error_description || 'Token refresh failed' });
+      return res.status(tokenRes.status).json({ error: tokens.error_description || 'Token refresh failed' });
     }
 
-    const tokens = await tokenRes.json();
-    // NOTE: In production you would persist the new access_token to your DB or
-    // update Render env vars via the Render API. For now we return it so you can
-    // manually copy it into your Render dashboard.
     res.json({
-      success:       true,
-      access_token:  tokens.access_token,
-      expires_in:    tokens.expires_in,
+      success:      true,
+      access_token: tokens.access_token,
+      expires_in:   tokens.expires_in,
       note: 'Copy access_token into AWEBER_ACCESS_TOKEN in your Render environment variables'
     });
 
@@ -312,7 +288,7 @@ app.post('/aweber/refresh-token', async (req, res) => {
   }
 });
 
-// ── Start ─────────────────────────────────────────────────────────
+// Start
 app.listen(PORT, () => {
   console.log(`AudioSpire Workforce Backend running on port ${PORT}`);
 });
