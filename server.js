@@ -184,8 +184,8 @@ app.post('/aweber/send', async (req, res) => {
 
     const createParams = new URLSearchParams({
       subject,
-      html_body:  body.replace(/\n/g, '<br>'),
-      plain_text: body,
+      body_html: body.replace(/\n/g, '<br>'),
+      body_text: body,
       from_name
     });
 
