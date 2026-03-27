@@ -164,6 +164,7 @@ app.post('/tts-elevenlabs', async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════════════
 //  ROUTE 4: /aweber/send  — Send broadcast email via AWeber API
+//  AWeber v1 API uses OAuth 1.0a — we use their access token directly
 // ═══════════════════════════════════════════════════════════════════
 app.post('/aweber/send', async (req, res) => {
   const { subject, body, from_name = 'Leigh Spusta', list_id } = req.body;
@@ -172,42 +173,65 @@ app.post('/aweber/send', async (req, res) => {
     return res.status(400).json({ error: 'subject and body are required' });
   }
 
-  const accessToken = process.env.AWEBER_ACCESS_TOKEN;
   const accountId   = process.env.AWEBER_ACCOUNT_ID;
   const listIdToUse = list_id || process.env.AWEBER_DEFAULT_LIST_ID;
+  const clientId    = process.env.AWEBER_CLIENT_ID;
+  const clientSecret= process.env.AWEBER_CLIENT_SECRET;
+  const accessToken = process.env.AWEBER_ACCESS_TOKEN;
+  const refreshToken= process.env.AWEBER_REFRESH_TOKEN;
 
-  if (!accessToken || !accountId || !listIdToUse) {
-    return res.status(500).json({ error: 'AWeber not configured — check Render env vars' });
+  console.log('AWeber send — list:', listIdToUse, 'subject:', subject);
+
+  // Helper: generate OAuth 1.0a Authorization header
+  function oauthHeader(method, url, extraParams = {}) {
+    const crypto = require('crypto');
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const ts    = Math.floor(Date.now() / 1000).toString();
+    const params = {
+      oauth_consumer_key:     clientId,
+      oauth_nonce:            nonce,
+      oauth_signature_method: 'HMAC-SHA1',
+      oauth_timestamp:        ts,
+      oauth_token:            accessToken,
+      oauth_version:          '1.0',
+      ...extraParams
+    };
+    const base = Object.keys(params).sort()
+      .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+      .join('&');
+    const sigBase = `${method}&${encodeURIComponent(url)}&${encodeURIComponent(base)}`;
+    const sigKey  = `${encodeURIComponent(clientSecret)}&${encodeURIComponent(refreshToken)}`;
+    const sig     = crypto.createHmac('sha1', sigKey).update(sigBase).digest('base64');
+    params.oauth_signature = sig;
+    const header = 'OAuth ' + Object.keys(params)
+      .filter(k => k.startsWith('oauth_'))
+      .map(k => `${encodeURIComponent(k)}="${encodeURIComponent(params[k])}"`)
+      .join(', ');
+    return header;
   }
 
-  console.log('AWeber send request — list:', listIdToUse, 'subject:', subject);
-
   try {
-    // Step 1: Create the broadcast
-    const createRes = await fetch(
-      `https://api.aweber.com/1.0/accounts/${accountId}/lists/${listIdToUse}/broadcasts`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${accessToken}`
-        },
-        body: JSON.stringify({
-          subject,
-          html_body:  body.replace(/\n/g, '<br>'),
-          plain_text: body,
-          from_name
-        })
-      }
-    );
+    const createUrl = `https://api.aweber.com/1.0/accounts/${accountId}/lists/${listIdToUse}/broadcasts`;
+    const createBody = JSON.stringify({
+      subject,
+      html_body:  body.replace(/\n/g, '<br>'),
+      plain_text: body,
+      from_name
+    });
+
+    const createRes = await fetch(createUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': oauthHeader('POST', createUrl)
+      },
+      body: createBody
+    });
 
     const createText = await createRes.text();
     console.log('AWeber create status:', createRes.status, 'body:', createText);
 
     if (!createRes.ok) {
-      if (createRes.status === 401) {
-        return res.status(401).json({ error: 'AWeber token expired — re-run the token refresh script (see SETUP_GUIDE.md)' });
-      }
       let errObj = {};
       try { errObj = JSON.parse(createText); } catch(_) {}
       return res.status(createRes.status).json({ error: errObj.error_description || createText || 'AWeber create error' });
@@ -215,20 +239,17 @@ app.post('/aweber/send', async (req, res) => {
 
     const broadcast = JSON.parse(createText);
     const broadcastId = broadcast.id || broadcast.broadcast_id;
-    console.log('AWeber broadcast created, id:', broadcastId);
+    console.log('Broadcast created, id:', broadcastId);
 
-    // Step 2: Schedule immediately
-    const scheduleRes = await fetch(
-      `https://api.aweber.com/1.0/accounts/${accountId}/lists/${listIdToUse}/broadcasts/${broadcastId}/schedule`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${accessToken}`
-        },
-        body: JSON.stringify({ scheduled_for: 'now' })
-      }
-    );
+    const scheduleUrl = `https://api.aweber.com/1.0/accounts/${accountId}/lists/${listIdToUse}/broadcasts/${broadcastId}/schedule`;
+    const scheduleRes = await fetch(scheduleUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': oauthHeader('POST', scheduleUrl)
+      },
+      body: JSON.stringify({ scheduled_for: 'now' })
+    });
 
     const scheduleText = await scheduleRes.text();
     console.log('AWeber schedule status:', scheduleRes.status, 'body:', scheduleText);
@@ -239,11 +260,7 @@ app.post('/aweber/send', async (req, res) => {
       return res.status(scheduleRes.status).json({ error: errObj.error_description || scheduleText || 'AWeber schedule error' });
     }
 
-    res.json({
-      success:      true,
-      broadcast_id: broadcastId,
-      message:      `Broadcast "${subject}" scheduled successfully`
-    });
+    res.json({ success: true, broadcast_id: broadcastId, message: `Broadcast "${subject}" sent successfully` });
 
   } catch (err) {
     console.error('/aweber/send error:', err.message);
