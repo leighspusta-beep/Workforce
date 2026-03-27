@@ -219,7 +219,7 @@ app.post('/aweber/send', async (req, res) => {
         'Content-Type':  'application/x-www-form-urlencoded',
         'Authorization': `Bearer ${accessToken}`
       },
-      body: new URLSearchParams({ scheduled_for: 'now' }).toString()
+      body: new URLSearchParams({ scheduled_for: new Date(Date.now() + 60000).toISOString() }).toString()
     });
 
     const scheduleText = await scheduleRes.text();
