@@ -182,18 +182,20 @@ app.post('/aweber/send', async (req, res) => {
   try {
     const createUrl = `https://api.aweber.com/1.0/accounts/${accountId}/lists/${listIdToUse}/broadcasts`;
 
+    const createParams = new URLSearchParams({
+      subject,
+      html_body:  body.replace(/\n/g, '<br>'),
+      plain_text: body,
+      from_name
+    });
+
     const createRes = await fetch(createUrl, {
       method: 'POST',
       headers: {
-        'Content-Type':  'application/json',
+        'Content-Type':  'application/x-www-form-urlencoded',
         'Authorization': `Bearer ${accessToken}`
       },
-      body: JSON.stringify({
-        subject,
-        html_body:  body.replace(/\n/g, '<br>'),
-        plain_text: body,
-        from_name
-      })
+      body: createParams.toString()
     });
 
     const createText = await createRes.text();
@@ -214,10 +216,10 @@ app.post('/aweber/send', async (req, res) => {
     const scheduleRes = await fetch(scheduleUrl, {
       method: 'POST',
       headers: {
-        'Content-Type':  'application/json',
+        'Content-Type':  'application/x-www-form-urlencoded',
         'Authorization': `Bearer ${accessToken}`
       },
-      body: JSON.stringify({ scheduled_for: 'now' })
+      body: new URLSearchParams({ scheduled_for: 'now' }).toString()
     });
 
     const scheduleText = await scheduleRes.text();
