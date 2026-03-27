@@ -221,13 +221,16 @@ app.post('/aweber/send', async (req, res) => {
     );
 
     if (!createRes.ok) {
-      console.error('AWeber create failed, status:', createRes.status);
-      const err = await createRes.json().catch(() => ({}));
-      // Check if token needs refresh
+      const errText = await createRes.text();
+      console.error('AWeber create failed, status:', createRes.status, 'body:', errText);
       if (createRes.status === 401) {
-        const body401 = await createRes.text();
-        console.error('AWeber 401 body:', body401);
         return res.status(401).json({
+          error: 'AWeber token expired — re-run the token refresh script (see SETUP_GUIDE.md)'
+        });
+      }
+      let errObj = {};
+      try { errObj = JSON.parse(errText); } catch(_) {}
+      return res.status(createRes.status).json({ error: errObj.error_description || errText || 'AWeber create error' });
           error: 'AWeber token expired — re-run the token refresh script (see SETUP_GUIDE.md)'
         });
       }
